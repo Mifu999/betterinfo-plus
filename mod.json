@@ -1,0 +1,146 @@
+{
+    "geode": "5.7.1",
+    "version": "v4.5.0",
+    "gd": {
+        "win": "2.2081"
+    },
+    "id": "mifu.betterinfo-plus",
+    "name": "BetterInfo+",
+    "developers": ["Cvolton", "Mifuu"],
+    "description": "BetterInfo with extra level sorting, visibility filters and page tools",
+    "links": {
+        "source": "https://github.com/cvolton/betterinfo-geode"
+    },
+    "tags": [
+        "online",
+        "enhancement",
+        "interface",
+        "utility"
+    ],
+    "early-load": true,
+    "incompatibilities": {
+        "cvolton.betterinfo": {
+            "importance": "breaking",
+            "version": "*"
+        }
+    },
+    "dependencies": {
+        "geode.node-ids": "v1.23.0",
+        "cvolton.misc_bugfixes": "v1.10.0",
+        "cvolton.level-id-api": "v2.0.0",
+        "eclipse.eclipse-menu": {
+            "version": "v1.8.1",
+            "required": false
+        },
+        "km7dev.server_api": {
+            "version": "v4.0.0",
+            "required": false
+        }
+    },
+    "settings": {
+        "auto-submit": {
+            "name": "Auto submit to leaderboards",
+            "description": "Automatically submits your level score to the level leaderboards upon exiting a level",
+            "type": "bool",
+            "default": false
+        },
+        "alt-button": {
+            "name": "Alternative button texture",
+            "description": "BI :)",
+            "type": "bool",
+            "default": false
+        },
+        "level-info": {
+            "name": "Enable Extended Level Info",
+            "description": "Whether the custom level info dialog from BI should be used",
+            "type": "bool",
+            "default": true
+        },
+        "fix-green-users": {
+            "name": "Fix broken usernames",
+            "description": "Whether destroyed green usernames no longer returned by the servers should be fixed using data from the GDHistory project",
+            "type": "bool",
+            "default": true
+        },
+        "white-id": {
+            "name": "White Level ID text",
+            "description": "Displays level IDs in level search white instead of grey. Useful if you have transparent lists",
+            "type": "bool",
+            "default": false
+        },
+        "show-comment-ids": {
+            "name": "Show comment IDs",
+            "description": "Whether comment IDs should be shown in comment cells",
+            "type": "bool",
+            "default": false
+        },
+        "show-level-ids": {
+            "name": "Show level IDs",
+            "description": "Whether level IDs should be shown in level cells",
+            "type": "bool",
+            "default": true
+        },
+        "exact-comment-date": {
+            "name": "Show Exact Comment Dates (read info)",
+            "description": "## Highly experimental feature\nShows full comment dates in YYYY-MM-DD using the GDHistory Date Estimator (online). Not fully accurate yet.\nThe comment date database is not complete yet, so estimates from the equivalent of today's date x years ago to September 1st of the same year will be highly inaccurate. This means that as of the time of addition of this feature all dates between xxxx-02-25 and xxxx-09-01 cannot be trusted yet.",
+            "type": "bool",
+            "default": false
+        },
+        "reset-saved-filters": {
+            "name": "Reset saved level filters on Restart",
+            "description": "Whether saved level filters should be reset when the game is restarted",
+            "type": "bool",
+            "default": true
+        },
+        "bip-title": {
+            "type": "title",
+            "name": "BetterInfo+ Additions"
+        },
+        "bip-visibility-filter": {
+            "name": "Visibility filter button",
+            "description": "Adds a button to level browsers that cycles between showing <cy>all</c>, <cg>public only</c>, <cy>unlisted</c>, <cy>unlisted only</c> and <cl>friends only</c> levels on the current page. Most useful in <cy>My Online Levels</c> and on friends' profiles (public tabs like Recent never contain unlisted levels server-side)",
+            "type": "bool",
+            "default": true
+        },
+        "bip-page-sort": {
+            "name": "Page sort button",
+            "description": "Adds a button to level browsers that sorts the levels of the <cy>current page</c> by downloads, likes (ascending or descending) or by level ID (newest / oldest)",
+            "type": "bool",
+            "default": true
+        },
+        "bip-completed-filter": {
+            "name": "Completed filter button",
+            "description": "Adds a button to level browsers that can <cy>hide completed levels</c> or show <cy>only completed levels</c> on the current page. Handy in the Recent / Most Downloaded / Most Liked tabs",
+            "type": "bool",
+            "default": true
+        },
+        "bip-copy-ids": {
+            "name": "Copy page IDs button",
+            "description": "Adds a button to level browsers that copies the level IDs of the currently displayed page to the clipboard (comma separated)",
+            "type": "bool",
+            "default": true
+        },
+        "bip-visibility-badges": {
+            "name": "Visibility badges on level cells",
+            "description": "Shows a small <cy>UNLISTED</c> / <cl>FRIENDS ONLY</c> label on level cells for non-public levels",
+            "type": "bool",
+            "default": true
+        },
+        "bip-global-sort": {
+            "name": "Sort in BetterInfo search results",
+            "description": "Adds a <cy>Sort</c> button to the BetterInfo filtered search results view (opened via the + button in level browsers). Unlike the page sort, this sorts <cg>all fetched results at once</c>, which is the best way to sort all your online levels by downloads or likes",
+            "type": "bool",
+            "default": true
+        }
+    },
+    "resources": {
+        "sprites": [
+            "resources/*.png"
+        ],
+        "spritesheets": {
+            "SearchButtons-410": [
+                "resources/searchbuttons-410/*.png"
+            ]
+        }
+    }
+}
