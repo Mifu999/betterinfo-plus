@@ -1,0 +1,397 @@
+#include "ExtendedLevelInfo.h"
+#include "../utils.hpp"
+#include "../managers/BetterInfoCache.h"
+
+#include <arc/future/UtilPollables.hpp>
+#include <algorithm>
+#include <string>
+
+ExtendedLevelInfo* ExtendedLevelInfo::create(GJGameLevel* level){
+    auto ret = new ExtendedLevelInfo();
+    if (ret && ret->init(level)) {
+        //robert 1 :D
+        ret->autorelease();
+    } else {
+        //robert -1
+        delete ret;
+        ret = nullptr;
+    }
+    return ret;
+}
+
+void ExtendedLevelInfo::onClose(cocos2d::CCObject* sender)
+{
+    CvoltonAlertLayerStub::onClose(sender);
+}
+
+void ExtendedLevelInfo::onCopyName(cocos2d::CCObject* sender)
+{
+    BetterInfo::copyToClipboard(m_level->m_levelName.c_str(), this);
+}
+
+void ExtendedLevelInfo::onCopyAuthor(cocos2d::CCObject* sender)
+{
+    BetterInfo::copyToClipboard(m_level->m_creatorName.c_str(), this);
+}
+
+void ExtendedLevelInfo::onCopyDesc(cocos2d::CCObject* sender)
+{
+    BetterInfo::copyToClipboard(m_level->getUnpackedLevelDescription().c_str(), this);
+}
+
+void ExtendedLevelInfo::onCopyInfo(cocos2d::CCObject* sender)
+{
+    auto& info = m_page % 2 == 0 ? m_primaryValues : m_secondaryValues;
+    if(info.size() <= sender->getTag()) return;
+
+    BetterInfo::copyToClipboard(info[sender->getTag()].c_str(), this);
+}
+
+void ExtendedLevelInfo::onNext(cocos2d::CCObject* sender)
+{
+    loadPage(m_page+1);
+}
+
+void ExtendedLevelInfo::onPrev(cocos2d::CCObject* sender)
+{
+    loadPage(m_page-1);
+}
+
+void ExtendedLevelInfo::loadPage(int page) {
+    if(!m_info) return;
+
+    this->m_page = page;
+    if(page % 2 == 0) { 
+        m_info->setString(m_primary);
+        m_nextBtn->setVisible(true);
+        m_prevBtn->setVisible(false);
+    } else {
+        m_info->setString(m_secondary);
+        m_nextBtn->setVisible(false);
+        m_prevBtn->setVisible(true);
+    } 
+}
+
+void ExtendedLevelInfo::refreshInfoTexts() {
+    auto cache = BetterInfoCache::sharedState();
+
+    std::ostringstream infoText;
+
+    m_primaryValues.clear();
+    m_secondaryValues.clear();
+
+    auto [uploadDate, updateDate] = BetterInfo::getLevelDates(m_level);
+
+    //first page
+    auto uploadDateStd = !m_level->m_uploadDate.empty() 
+        ? std::string(m_level->m_uploadDate) 
+        : uploadDate != 0 
+            ? TimeUtils::timestampToHumanReadable(uploadDate) 
+            : LevelMetadata::addPlus(cache->getLevelDates(m_level->m_levelID).m_uploadDate);
+
+    auto updateDateStd = !m_level->m_updateDate.empty() 
+        ? std::string(m_level->m_updateDate) 
+        : updateDate != 0 
+            ? TimeUtils::timestampToHumanReadable(updateDate) 
+            : LevelMetadata::addPlus(cache->getLevelDates(m_level->m_levelID).m_updateDate);
+    
+    int levelPassword = m_level->m_password;
+
+    m_primaryValues.push_back(LevelMetadata::stringDate(uploadDateStd));
+    m_primaryValues.push_back(LevelMetadata::stringDate(updateDateStd));
+    m_primaryValues.push_back(LevelMetadata::zeroIfNA(m_level->m_originalLevel));
+    m_primaryValues.push_back(LevelMetadata::getGameVersionName(m_level->m_gameVersion));
+    m_primaryValues.push_back(LevelMetadata::passwordString(levelPassword));
+    m_primaryValues.push_back(TimeUtils::workingTime(m_level->m_workingTime));
+    m_primaryValues.push_back(TimeUtils::workingTime(m_level->m_workingTime2));
+
+    infoText << "\n<cj>Uploaded</c>: " << m_primaryValues[0]
+        << "\n<cj>Updated</c>: " << m_primaryValues[1]
+        << "\n<cg>Original</c>: " << m_primaryValues[2]
+        << "\n<cy>Game Version</c>: " << m_primaryValues[3]
+        << "\n<co>Password</c>: " << m_primaryValues[4]
+        << "\n<cr>In Editor</c>: " << m_primaryValues[5]
+        << "\n<cr>Editor (C)</c>: " << m_primaryValues[6];
+
+    m_primary = infoText.str();
+
+    //second page
+    size_t offset = 0;
+
+    infoText.str("");
+    if(uploadDate != 0) {
+        m_uploadDateEstimated = uploadDate;
+        m_secondaryValues.push_back(TimeUtils::timeToString(uploadDate, true));
+        infoText << "\n<cj>Uploaded</c>: " << m_secondaryValues[offset++];
+    } else if(!ServerUtils::isGDPS()) {
+        m_secondaryValues.push_back(TimeUtils::timeToIsoDate(m_uploadDateEstimated));
+        infoText << "\n<cj>Uploaded</c>: " << m_secondaryValues[offset++];
+    }
+
+    if(updateDate != 0) {
+        m_secondaryValues.push_back(TimeUtils::timeToString(updateDate, true));
+        infoText << "\n<cj>Updated</c>: " << m_secondaryValues[offset++];
+    }
+
+    m_secondaryValues.push_back(LevelMetadata::zeroIfNA(m_level->m_objectCount));
+    m_secondaryValues.push_back(LevelMetadata::zeroIfNA(m_objectsEstimated));
+    m_secondaryValues.push_back(m_maxGameVersion);
+    m_secondaryValues.push_back(LevelMetadata::zeroIfNA(m_level->m_featured));
+    m_secondaryValues.push_back(LevelMetadata::boolString(m_level->m_twoPlayerMode));
+    m_secondaryValues.push_back(m_fileSizeCompressed + " / " + m_fileSizeUncompressed);
+
+    infoText << "\n<cg>Objects</c>: " << m_secondaryValues[offset++]
+        << "\n<cg>Objects (est.)</c>: " << m_secondaryValues[offset++]
+        << "\n<cy>Game Ver (est.)</c>: " << m_secondaryValues[offset++]
+        << "\n<cc>Feature Score</c>: " << m_secondaryValues[offset++]
+        << "\n<co>Two-player</c>: " << m_secondaryValues[offset++]
+        << "\n<cr>Size</c>: " << m_secondaryValues[offset++];
+    ;
+
+    m_secondary = infoText.str();
+}
+
+void ExtendedLevelInfo::setupAdditionalInfo() {
+    if(!m_uploadDateEstimated) {
+        this->retain();
+        BetterInfoCache::sharedState()->fetchLevelDate(m_level->m_levelID, [this](time_t date) {
+            if(m_level->m_uploadDate.empty()) m_level->m_uploadDate = TimeUtils::timestampToHumanReadable(date);
+    
+            m_uploadDateEstimated = date;
+            refreshInfoTexts();
+            loadPage(m_page);
+            this->release();
+        });
+    }
+    
+    this->retain();
+    m_extraInfoHolder.spawn(
+        "BetterInfo ExtendedLevelInfo",
+        [this]() -> arc::Future<> {
+        auto levelString = BetterInfo::decodeBase64Gzip(m_level->m_levelString);
+        auto levelStringView = std::string_view(levelString);
+        co_await waitForMainThread([this] {
+            this->release();
+        });
+        
+        auto objectsEstimated = std::count(levelStringView.begin(), levelStringView.end(), ';');
+        co_await arc::yield();
+
+        auto fileSizeCompressed = BetterInfo::fileSize(m_level->m_levelString.size());
+        co_await arc::yield();
+
+        auto fileSizeUncompressed = BetterInfo::fileSize(levelString.size());
+        co_await arc::yield();
+
+        auto maxGameVersion = BetterInfo::gameVerForDecompressedLevelString(levelString);
+        co_await arc::yield();
+
+        co_await waitForMainThread([this, objectsEstimated = std::move(objectsEstimated), fileSizeCompressed = std::move(fileSizeCompressed), fileSizeUncompressed = std::move(fileSizeUncompressed), maxGameVersion = std::move(maxGameVersion)]() mutable {
+            m_objectsEstimated = std::move(objectsEstimated);
+            m_fileSizeCompressed = std::move(fileSizeCompressed);
+            m_fileSizeUncompressed = std::move(fileSizeUncompressed);
+            m_maxGameVersion = std::move(maxGameVersion);
+        });
+    },
+    [this] {
+        refreshInfoTexts();
+        this->loadPage(this->m_page);
+    });
+}
+
+bool ExtendedLevelInfo::init(GJGameLevel* level){
+    if(!CvoltonAlertLayerStub::init({440.0f, 290.0f})) return false;
+
+    auto winSize = CCDirector::sharedDirector()->getWinSize();
+
+    this->m_level = level;
+
+    auto levelName = CCLabelBMFont::create(m_level->m_levelName.c_str(), "bigFont.fnt");
+    auto levelNameBtn = CCMenuItemSpriteExtra::create(
+        levelName,
+        this,
+        menu_selector(ExtendedLevelInfo::onCopyName)
+    );
+    m_buttonMenu->addChild(levelNameBtn);
+    levelNameBtn->setPosition({0,125});
+    levelNameBtn->setID("level-name-button"_spr);
+
+    std::ostringstream userNameText;
+    userNameText << "By " << std::string(m_level->m_creatorName);
+    auto userName = CCLabelBMFont::create(userNameText.str().c_str(), "goldFont.fnt");
+    userName->setScale(0.8f);
+    auto userNameBtn = CCMenuItemSpriteExtra::create(
+        userName,
+        this,
+        menu_selector(ExtendedLevelInfo::onCopyAuthor)
+    );
+    userNameBtn->setPosition({0,99});
+    userNameBtn->setID("username-button"_spr);
+    m_buttonMenu->addChild(userNameBtn);
+
+    cocos2d::extension::CCScale9Sprite* descBg = cocos2d::extension::CCScale9Sprite::create("square02b_001.png", { 0.0f, 0.0f, 80.0f, 80.0f });
+    descBg->setContentSize({340,55});
+    descBg->setColor({130,64,33});
+    m_buttonMenu->addChild(descBg, -1);
+    descBg->setPosition({0,52});
+    descBg->setID("description-background"_spr);
+
+    auto descText = BetterInfo::fixNullByteCrash(BetterInfo::fixColorCrashes(m_level->getUnpackedLevelDescription()));
+    size_t descLength = descText.length();
+    float descDelimiter = 1;
+    if(descLength > 140) descLength = 140;
+    if(descLength > 70) descDelimiter = ((((140 - descLength) / 140) * 0.3f) + 0.7f);
+    auto description = TextArea::create(descText, "chatFont.fnt", 1, 295 / descDelimiter, {0.5f,0.5f}, 20, false);
+    description->setScale(descDelimiter);
+    description->setAnchorPoint({1,1});
+    description->setPosition( ( (description->getContentSize() / 2 ) * descDelimiter ) + (CCPoint(340,55) / 2) );
+    auto descSprite = CCSprite::create();
+    descSprite->addChild(description);
+    descSprite->setContentSize({340,55});
+    auto descBtn = CCMenuItemSpriteExtra::create(
+        descSprite,
+        this,
+        menu_selector(ExtendedLevelInfo::onCopyDesc)
+    );
+    descBtn->setPosition({0,52});
+    descBtn->setID("description-button"_spr);
+    m_buttonMenu->addChild(descBtn);
+
+    cocos2d::extension::CCScale9Sprite* infoBg = cocos2d::extension::CCScale9Sprite::create("square02b_001.png", { 0.0f, 0.0f, 80.0f, 80.0f });
+    infoBg->setContentSize({340,148});
+    infoBg->setColor({123,60,31});
+    m_buttonMenu->addChild(infoBg, -1);
+    infoBg->setPosition({0,-57});
+    infoBg->setID("info-background"_spr);
+
+    refreshInfoTexts();
+    setupAdditionalInfo();
+
+    m_info = TextArea::create(m_primary, "chatFont.fnt", 1, 185, {0,1}, 20, false);
+    m_info->setPosition({-160.5,26});
+    m_info->setAnchorPoint({0,1});
+    //m_info->setScale(0.925f);
+    m_info->setScale(0.85f);
+    m_info->setID("info-text"_spr);
+    m_buttonMenu->addChild(m_info);
+
+    auto requestedRate = createTextLabel("Requested Rate:", {88,-1}, 0.5f, m_buttonMenu);
+    requestedRate->setID("requested-rate-label"_spr);
+
+    auto diffSprite = CCSprite::createWithSpriteFrameName(LevelMetadata::getDifficultyIcon(m_level->m_starsRequested));
+    diffSprite->setPosition({88,-57});
+    diffSprite->setID("difficulty-sprite"_spr);
+    m_buttonMenu->addChild(diffSprite, 1);
+
+    if(m_level->m_starsRequested > 0){
+        auto featureSprite = CCSprite::createWithSpriteFrameName("GJ_featuredCoin_001.png");
+        featureSprite->setPosition({88,-57});
+        featureSprite->setID("featured-sprite"_spr);
+        m_buttonMenu->addChild(featureSprite);
+        //infoSprite->setScale(0.7f);
+
+        auto starsLabel = createTextLabel(std::to_string(m_level->m_starsRequested), {88, -87}, 0.4f, m_buttonMenu);
+        starsLabel->setAnchorPoint({1,0.5});
+        starsLabel->setID("stars-label"_spr);
+
+        auto diffSprite = CCSprite::createWithSpriteFrameName(m_level->isPlatformer() ? "moon_small01_001.png" : "star_small01_001.png");
+        diffSprite->setPosition({95,-87});
+        diffSprite->setID("stars-sprite"_spr);
+        m_buttonMenu->addChild(diffSprite);
+    }
+
+    /*
+        thanks to Alphalaneous for quick UI improvement concept lol
+    */
+
+    auto separator = CCSprite::createWithSpriteFrameName("floorLine_001.png");
+    separator->setPosition({6,-57});
+    separator->setScaleX(0.3f);
+    separator->setScaleY(1);
+    separator->setOpacity(100);
+    separator->setRotation(90);
+    separator->setID("separator-sprite"_spr);
+    m_buttonMenu->addChild(separator);
+
+    /*
+        next/prev page btn
+    */
+    auto prevSprite = CCSprite::createWithSpriteFrameName("GJ_arrow_01_001.png");
+    prevSprite->setScale(.8f);
+    m_prevBtn = CCMenuItemSpriteExtra::create(
+        prevSprite,
+        this,
+        menu_selector(ExtendedLevelInfo::onPrev)
+    );
+    m_prevBtn->setPosition({-195,-53});
+    m_prevBtn->setID("prev-button"_spr);
+    m_buttonMenu->addChild(m_prevBtn);
+
+    auto nextSprite = CCSprite::createWithSpriteFrameName("GJ_arrow_01_001.png");
+    nextSprite->setFlipX(true);
+    nextSprite->setScale(.8f);
+    m_nextBtn = CCMenuItemSpriteExtra::create(
+        nextSprite,
+        this,
+        menu_selector(ExtendedLevelInfo::onNext)
+    );
+    m_nextBtn->setPosition({195,-53});
+    m_nextBtn->setID("next-button"_spr);
+    m_buttonMenu->addChild(m_nextBtn);
+
+    /*
+        copy buttons
+    */
+    auto copyMenu = CCMenu::create();
+    copyMenu->setLayout(
+        ColumnLayout::create()
+            ->setAxisReverse(true)
+            ->setGap(-1.5f)
+    );
+    copyMenu->setContentSize({170,148});
+    copyMenu->setPosition({winSize.width / 2 - 83, winSize.height / 2 - 56});
+    copyMenu->setID("copy-menu"_spr);
+    copyMenu->setZOrder(11);
+    m_mainLayer->addChild(copyMenu);
+
+    for(size_t i = 0; i < 8; i++) {
+        auto btn = CCMenuItemSpriteExtra::create(
+            ButtonSprite::create("h", 170, true, "bigFont.fnt", "GJ_button_01.png", 18.7, 1),
+            this,
+            menu_selector(ExtendedLevelInfo::onCopyInfo)
+        );
+        btn->getNormalImage()->setVisible(false);
+        btn->setTag(i);
+        btn->setID(fmt::format("copy-button-{}"_spr, i));
+        copyMenu->addChild(btn);
+    }
+
+    copyMenu->updateLayout();
+
+    loadPage(0);
+
+    return true;
+}
+
+CCLabelBMFont* ExtendedLevelInfo::createTextLabel(const std::string text, const CCPoint& position, const float scale, CCNode* menu, const char* font){
+    CCLabelBMFont* bmFont = CCLabelBMFont::create(text.c_str(), font);
+    bmFont->setPosition(position);
+    bmFont->setScale(scale);
+    menu->addChild(bmFont);
+    return bmFont;
+}
+
+void ExtendedLevelInfo::keyDown(enumKeyCodes key, double timestamp) {
+    switch(key) {
+        case KEY_Left:
+        case CONTROLLER_Left:
+            if(m_prevBtn->isVisible()) onPrev(nullptr);
+            break;
+        case KEY_Right:
+        case CONTROLLER_Right:
+            if(m_nextBtn->isVisible()) onNext(nullptr);
+            break;
+        default:
+            FLAlertLayer::keyDown(key, timestamp);
+    }
+}

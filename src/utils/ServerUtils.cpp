@@ -1,0 +1,330 @@
+#include "ServerUtils.h"
+#include "../utils.hpp"
+#include <km7dev.server_api/include/ServerAPIEvents.hpp>
+
+#include <asp/iter.hpp>
+
+using namespace geode::prelude;
+
+static inline std::unordered_map<std::string, Ref<cocos2d::CCArray>> s_cache;
+
+bool ServerUtils::isGDPS() {
+    return getBaseURL() != "https://www.boomlings.com/database";
+}
+
+web::WebRequest ServerUtils::getBaseRequest(bool setUserAgent) {
+    return web::WebRequest().userAgent(setUserAgent ? fmt::format("BetterInfo {} / Geode {}", Mod::get()->getVersion().toVString(true), Loader::get()->getVersion().toVString(true)) : "");
+}
+
+std::string ServerUtils::getBaseURL() {
+    if(Loader::get()->isModLoaded("km7dev.server_api")) {
+        auto url = ServerAPIEvents::getCurrentServer().url;
+        if(!url.empty() && url != "NONE_REGISTERED") {
+            while(url.ends_with("/")) url.pop_back();
+            return url;
+        }
+    }
+
+    // The addresses are pointing to "https://www.boomlings.com/database/getGJLevels21.php"
+    // in the main game executable
+    char* originalUrl = nullptr;
+    #ifdef GEODE_IS_WINDOWS
+        static_assert(GEODE_COMP_GD_VERSION == 22081, "Unsupported GD version");
+        originalUrl = (char*)(base::get() + 0x558b70);
+    #elif defined(GEODE_IS_ARM_MAC)
+        static_assert(GEODE_COMP_GD_VERSION == 22081, "Unsupported GD version");
+        originalUrl = (char*)(base::get() + 0x77d709);
+    #elif defined(GEODE_IS_INTEL_MAC)
+        static_assert(GEODE_COMP_GD_VERSION == 22081, "Unsupported GD version");
+        originalUrl = (char*)(base::get() + 0x868df0);
+    #elif defined(GEODE_IS_ANDROID64)
+        static_assert(GEODE_COMP_GD_VERSION == 22081, "Unsupported GD version");
+        originalUrl = (char*)(base::get() + 0xECCF90);
+    #elif defined(GEODE_IS_ANDROID32)
+        static_assert(GEODE_COMP_GD_VERSION == 22081, "Unsupported GD version");
+        originalUrl = (char*)(base::get() + 0x96C0DB);
+    #elif defined(GEODE_IS_IOS)
+        static_assert(GEODE_COMP_GD_VERSION == 22081, "Unsupported GD version");
+        originalUrl = (char*)(base::get() + 0x6b8cc2);
+    #else
+        static_assert(false, "Unsupported platform");
+    #endif
+
+    std::string ret = originalUrl;
+    if(ret.size() > 34) ret = ret.substr(0, 34);
+
+    return ret;
+}
+
+std::string ServerUtils::getBasePostString(bool includeAccount) {
+    auto ret =  fmt::format("gameVersion={}&binaryVersion={}&gdw={}", 22, 42, 0);
+
+    if(includeAccount) {
+        auto GJAM = GJAccountManager::sharedState();
+        auto GM = GameManager::sharedState();
+        ret += fmt::format("&udid={}&uuid={}", GM->m_playerUDID, GM->m_playerUserID.value());
+        if(GJAM->m_accountID > 0) ret += fmt::format("&accountID={}&gjp2={}", GJAM->m_accountID, GJAM->m_GJP2);
+    }
+
+
+    return ret;
+}
+
+std::string ServerUtils::getSearchObjectKey(GJSearchObject* searchObject) {
+    if(searchObject->m_searchType == SearchType::Users) return fmt::format("{}_{}_{}", (int) SearchType::Users, searchObject->m_searchQuery, searchObject->m_page);
+
+    std::array<std::string, 3> stringKeys = {searchObject->m_searchQuery, searchObject->m_difficulty, searchObject->m_length};
+    std::array<int, 18> intKeys = {
+        searchObject->m_page,
+        searchObject->m_starFilter,
+        searchObject->m_uncompletedFilter,
+        searchObject->m_featuredFilter,
+        searchObject->m_songID,
+        searchObject->m_originalFilter,
+        searchObject->m_twoPlayerFilter,
+        searchObject->m_customSongFilter,
+        searchObject->m_songFilter,
+        searchObject->m_noStarFilter,
+        searchObject->m_coinsFilter,
+        searchObject->m_epicFilter,
+        searchObject->m_legendaryFilter,
+        searchObject->m_mythicFilter,
+        searchObject->m_completedFilter,
+        (int) searchObject->m_demonFilter,
+        searchObject->m_folder,
+        searchObject->m_searchMode
+    };
+
+    std::string ret = std::to_string((int) searchObject->m_searchType) + "_";
+
+    for(auto key : stringKeys) ret += (key + "_");
+    for(auto key : intKeys) ret += (std::to_string(key) + "_");
+
+    ret.pop_back();
+    return ret;
+}
+
+void ServerUtils::showResponseError(const web::WebResponse& response) {
+    if(response.header("retry-after").has_value()) {
+        showRateLimitError(BetterInfo::stoi(response.header("retry-after").value()));
+    } else {
+        showCFError(response.string().unwrapOr(""));
+    }
+}
+
+void ServerUtils::storeUserNames(std::string_view userData) {
+    auto GLM = GameLevelManager::sharedState();
+
+    for(auto currentUser : asp::iter::split(userData, '|')) {
+        auto info = asp::iter::split(currentUser, ":").collect();
+        if(info.size() < 3) continue;
+
+        int userID = BetterInfo::stoi(info[0]);
+        int accountID = BetterInfo::stoi(info[2]);
+
+        if(userID > 0) GLM->storeUserName(userID, accountID, gd::string(info[1].data(), info[1].size()));
+    }
+}
+
+ServerUtils::ParsedResponse ServerUtils::parseResponse(const web::WebResponse& response, size_t expectedParts) {
+    ParsedResponse ret;
+    if(!response.ok()) {
+        showResponseError(response);
+        ret.m_ok = false;
+        return ret;
+    }
+
+    ret.m_response = std::make_unique<std::string>(response.string().unwrapOr(""));
+    if(*ret.m_response == "-1") {
+        ret.m_ok = false;
+        ret.m_explicitError = true;
+        return ret;
+    }
+
+    auto responseParts = asp::iter::split(*ret.m_response, '#').collect();
+
+    if(responseParts.size() < expectedParts) {
+        ret.m_ok = false;
+        return ret;
+    }
+
+    ret.m_parts = std::move(responseParts);
+    ret.m_ok = true;
+    return ret;
+}
+
+template <typename T>
+CCArray* cacheSearchResult(const std::string& key, const std::vector<Ref<T>>& levels, std::string_view pageData) {
+    auto GLM = GameLevelManager::sharedState();
+
+    CCArray* levelArray = CCArray::create();
+    for(auto level : levels) {
+        levelArray->addObject(level);
+    }
+
+    if(key.length() < 255) GLM->storeSearchResult(levelArray, gd::string(pageData.data(), pageData.size()), key.c_str());
+    else s_cache[key] = levelArray;
+
+    return levelArray;
+}
+
+void ServerUtils::getLevelLists(GJSearchObject* searchObject, std::function<void(std::shared_ptr<std::vector<Ref<GJLevelList>>>, bool)> callback, bool cacheLevels) {
+    std::string postString = fmt::format("{}&str={}&type={}&page={}",
+        getBasePostString(), searchObject->m_searchQuery, (int) searchObject->m_searchType, searchObject->m_page);
+
+    // TODO: in theory this is not fully thread safe
+    // - it can crash if you follow someone while its iterating the followed list
+    // however i cannot think of a way to reproduce this in-game without doing it
+    // in code, so i will leave fixing this for later
+    postString += GameLevelManager::sharedState()->writeSpecialFilters(searchObject);
+
+    postString += "&secret=Wmfd2893gb7";
+
+    std::string key = getSearchObjectKey(searchObject);
+    async::spawn(
+        getBaseRequest(false).bodyString(postString).post(fmt::format("{}/getGJLevelLists.php", getBaseURL())),
+        [callback, key, cacheLevels](web::WebResponse response) {
+            auto GLM = GameLevelManager::sharedState();
+            auto levels = std::make_shared<std::vector<Ref<GJLevelList>>>();
+
+            auto parsed = parseResponse(response, 3);
+            if(!parsed) {
+                callback(levels, false);
+                return;
+            }
+
+            std::string_view levelData(parsed.m_parts[0]);
+            std::string_view userData(parsed.m_parts[1]);
+            std::string_view pageData(parsed.m_parts[2]);
+
+            ServerUtils::storeUserNames(userData);
+
+            *levels = asp::iter::split(levelData, '|').map([](auto currentLevel) {
+                return GJLevelList::create(BetterInfo::responseToDict(currentLevel));
+            }).collect<std::vector<Ref<GJLevelList>>>();
+
+            for(auto level : *levels) {
+                GLM->updateSavedLevelList(level);
+            }
+
+            if(cacheLevels) cacheSearchResult(key, *levels, pageData);
+
+            callback(levels, true);
+
+            return;
+        }
+    );
+}
+
+void ServerUtils::getOnlineLevels(GJSearchObject* searchObject, std::function<void(std::shared_ptr<std::vector<Ref<GJGameLevel>>>, bool success, bool explicitError)> callback, bool cacheLevels) {
+    std::string postString = fmt::format("{}&type={}&str={}&diff={}&len={}&page={}&total={}&uncompleted={}&onlyCompleted={}&featured={}&original={}&twoPlayer={}&coins={}",
+        getBasePostString(), (int) searchObject->m_searchType, searchObject->m_searchQuery, searchObject->m_difficulty, searchObject->m_length, searchObject->m_page,
+        searchObject->m_total, searchObject->m_uncompletedFilter ? 1 : 0, searchObject->m_completedFilter ? 1 : 0, searchObject->m_featuredFilter ? 1 : 0, searchObject->m_originalFilter ? 1 : 0,
+        searchObject->m_twoPlayerFilter ? 1 : 0, searchObject->m_coinsFilter ? 1 : 0);
+
+    if(searchObject->m_epicFilter) postString += "&epic=1";
+    if(searchObject->m_legendaryFilter) postString += "&legendary=1";
+    if(searchObject->m_mythicFilter) postString += "&mythic=1";
+    if(searchObject->m_searchType == SearchType::UsersLevels) postString += fmt::format("&local={}", (BetterInfo::stoi(searchObject->m_searchQuery) == GameManager::sharedState()->m_playerUserID) ? 1 : 0);
+    if(searchObject->m_songFilter) {
+        postString += fmt::format("&song={}", searchObject->m_songID);
+        if(searchObject->m_customSongFilter) postString += "&customSong=1";
+    }
+    if(searchObject->m_uncompletedFilter || searchObject->m_completedFilter) {
+        auto completedArray = CCArrayExt<GJGameLevel*>(GameLevelManager::sharedState()->getCompletedLevels(GameManager::sharedState()->getGameVariable("0073")));
+
+        std::vector<int> completedIDs;
+        completedIDs.reserve(completedArray.size());
+        
+        for(auto level : completedArray) {
+            completedIDs.push_back(level->m_levelID.value());
+        }
+
+        postString += fmt::format("&completedLevels={}", fmt::join(completedIDs, ","));
+    }
+    //if(searchObject->m_searchType == SearchType::LevelListsOnClick) postString += "&inc=1";
+
+    // TODO: in theory this is not fully thread safe
+    // - it can crash if you follow someone while its iterating the followed list
+    // however i cannot think of a way to reproduce this in-game without doing it
+    // in code, so i will leave fixing this for later
+    postString += GameLevelManager::sharedState()->writeSpecialFilters(searchObject);
+
+    postString += "&secret=Wmfd2893gb7";
+
+    std::string key = getSearchObjectKey(searchObject);
+    async::spawn(
+        getBaseRequest(false).bodyString(postString).post(fmt::format("{}/getGJLevels21.php", getBaseURL())),
+        [callback, key, cacheLevels](web::WebResponse response) {
+            auto levels = std::make_shared<std::vector<Ref<GJGameLevel>>>();
+
+            auto parsed = parseResponse(response, 4);
+            if(!parsed) {
+                callback(levels, parsed.m_ok, parsed.m_explicitError);
+                return;
+            }
+
+            std::string_view levelData = parsed.m_parts[0];
+            std::string_view userData = parsed.m_parts[1];
+            std::string_view songData = parsed.m_parts[2];
+            std::string_view pageData = parsed.m_parts[3];
+
+            MusicDownloadManager::sharedState()->createSongsInfo(gd::string(songData.data(), songData.size()), "");
+            ServerUtils::storeUserNames(userData);
+
+            *levels = asp::iter::split(levelData, '|').map([](auto currentLevel) {
+                return GJGameLevel::create(BetterInfo::responseToDict(currentLevel), false);
+            }).collect<std::vector<Ref<GJGameLevel>>>();
+
+            CCArray* levelArray = cacheSearchResult(key, *levels, pageData);
+            GameLevelManager::sharedState()->saveFetchedLevels(levelArray);
+
+            callback(levels, true, false);
+
+            return;
+        }
+    );
+}
+
+CCArray* ServerUtils::getStoredOnlineLevels(const std::string& key) {
+    if(key.length() < 255) return GameLevelManager::sharedState()->getStoredOnlineLevels(key.c_str());
+
+    if(s_cache.find(key) != s_cache.end()) return s_cache[key];
+    return nullptr;
+}
+
+void ServerUtils::resetCache() {
+    s_cache.clear();
+}
+
+bool ServerUtils::showCFError(const std::string& data) {
+    if(data.starts_with("error code:")) {
+        auto error = BetterInfo::stoi(data.substr(12));
+        std::string message = "";
+        switch(error) {
+            case 1005:
+                message = "  Your ISP is banned from GD.\n  If you are using a VPN, try disabling it.\n  (error code: 1005)";
+                break;
+            case 1006:
+                message = "  Your IP address is banned from GD.\n  If you are using a VPN, try disabling it.\n  (error code: 1006)";
+                break;
+            case 1015:
+                message = " Rate limited by RobTop's server.\n (error code: 1015)";
+                break;
+            case 1020:
+                message = fmt::format(" Server is down for maintenance.\n (error code: {})", error);
+                break;
+            default:
+                message = fmt::format("  A server error has occurred.\n  (error code: {})", error);
+                break;
+        }
+        BetterInfo::showUnimportantNotification(message, NotificationIcon::Error, 5.f);
+        return true;
+    }
+    return false;
+}
+
+bool ServerUtils::showRateLimitError(int seconds) {
+    BetterInfo::showUnimportantNotification(fmt::format(" Rate limited by RobTop's server\n Try again in {}", GameToolbox::getTimeString(seconds, false)), NotificationIcon::Warning, 5.f);
+    return true;
+}

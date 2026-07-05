@@ -1,0 +1,201 @@
+#include "BetterInfoOnline.h"
+#include "BetterInfoCache.h"
+#include "../utils.hpp"
+#include <Geode/utils/web.hpp>
+#include <Geode/cocos/support/base64.h>
+#include <asp/iter.hpp>
+
+bool BetterInfoOnline::init(){
+    return true;
+}
+
+BetterInfoOnline::BetterInfoOnline(){}
+
+
+void BetterInfoOnline::loadScores(int accountID, bool force, BILeaderboardDelegate* delegate) {
+    loadScores(accountID, force, delegate, nullptr);
+}
+
+void BetterInfoOnline::loadScores(int accountID, bool force, Ref<ProfilePage> profilePage) {
+    loadScores(accountID, force, nullptr, profilePage);
+}
+
+void BetterInfoOnline::loadScores(int accountID, bool force, BILeaderboardDelegate* delegate, Ref<ProfilePage> profilePage, int stat){
+    auto loadKey = std::make_pair(accountID, stat);
+
+    //cache optimization
+    if(!force && m_scoreDict.contains(loadKey)) {
+        sendScores(m_scoreDict[loadKey], accountID, stat, delegate, profilePage);
+        return;
+    }
+
+    m_delegates.insert(delegate);
+
+    async::spawn(ServerUtils::getBaseRequest(false)
+        .bodyString(fmt::format("{}&udid={}&stat={}&type=relative&secret=Wmfd2893gb7", ServerUtils::getBasePostString(false), accountID, stat))
+        .post(fmt::format("{}/getGJScores20.php", ServerUtils::getBaseURL())),
+        [this, accountID, stat, delegate, profilePage, loadKey](web::WebResponse response) {
+            if(response.ok()) {
+                generateScores(response.string().unwrapOr(""), loadKey);
+                if(m_delegates.contains(delegate)) {
+                    sendScores(m_scoreDict[loadKey], accountID, stat, delegate, profilePage);
+                    m_delegates.erase(delegate);
+                }
+                BetterInfoCache::sharedState()->cacheUserScores(m_scoreDict[loadKey]);
+            } else {
+                sendScores(CCArray::create(), accountID, stat, delegate, profilePage);
+                ServerUtils::showResponseError(response);
+            }
+        });
+}
+
+void BetterInfoOnline::generateScores(const std::string& response, std::pair<int, int> loadKey){
+    auto GM = GameManager::sharedState();
+    auto BICache = BetterInfoCache::sharedState();
+
+    CCArray* scores = CCArray::create();
+    m_scoreDict[loadKey] = scores;
+
+    if(response == "-1") return;
+
+    for(auto score : asp::iter::split(response, "|")) {
+        auto scoreObj = GJUserScore::create(BetterInfo::responseToDict(score));
+        GameLevelManager::sharedState()->storeUserName(scoreObj->m_userID, scoreObj->m_accountID, scoreObj->m_userName);
+
+        if(!scoreObj->m_userUDID.empty()) scoreObj->m_userUDID = GM->m_playerUDID;
+
+        scores->addObject(scoreObj);
+    }
+}
+
+void BetterInfoOnline::sendScores(cocos2d::CCArray* scores, int accountID, int stat, BILeaderboardDelegate* delegate, Ref<ProfilePage> profilePage){
+    if(delegate) {
+        delegate->onLeaderboardFinished(scores, stat);
+    }else if(profilePage) {
+        sendScoreToProfilePage(scores, accountID, profilePage);
+    }
+}
+
+void BetterInfoOnline::sendScoreToProfilePage(cocos2d::CCArray* scores, int accountID, Ref<ProfilePage> profilePage){
+    if(!profilePage) return;
+
+    for(auto score : CCArrayExt<GJUserScore>(scores)) {
+        score->m_messageState = 2;
+        score->m_friendStatus = 1;
+        score->m_glowEnabled = score->m_special == 2;
+        if(score->m_accountID == accountID) {
+            score->m_globalRank = score->m_playerRank;
+            switch(score->m_iconType) {
+                case IconType::Cube:
+                    score->m_playerCube = score->m_iconID;
+                    break;
+                case IconType::Ship:
+                    score->m_playerShip = score->m_iconID;
+                    break;
+                case IconType::Ball:
+                    score->m_playerBall = score->m_iconID;
+                    break;
+                case IconType::Ufo:
+                    score->m_playerUfo = score->m_iconID;
+                    break;
+                case IconType::Wave:
+                    score->m_playerWave = score->m_iconID;
+                    break;
+                case IconType::Robot:
+                    score->m_playerRobot = score->m_iconID;
+                    break;
+                case IconType::Spider:
+                    score->m_playerSpider = score->m_iconID;
+                    break;
+                case IconType::Swing:
+                    score->m_playerSwing = score->m_iconID;
+                    break;
+                case IconType::Jetpack:
+                    score->m_playerJetpack = score->m_iconID;
+                    break;
+                default:
+                    break;
+            }
+
+            profilePage->userInfoChanged(score);
+            break;
+        }
+    }
+}
+
+void BetterInfoOnline::cancelScoresRequest(BILeaderboardDelegate* delegate){
+    m_delegates.erase(delegate);
+}
+
+arc::Future<CCArray*> BetterInfoOnline::loadGlobalScores(LeaderboardType type, LeaderboardStat stat, bool force) {
+    const char* typeStr = nullptr;
+    if (type == LeaderboardType::Creator) {
+        typeStr = "creators";
+    } else if (type == LeaderboardType::Top100) {
+        switch(stat) {
+            case LeaderboardStat::Stars:
+                typeStr = "stars";
+                break;
+            case LeaderboardStat::Moons:
+                typeStr = "moons";
+                break;
+            case LeaderboardStat::Demons:
+                typeStr = "demons";
+                break;
+            case LeaderboardStat::UserCoins:
+                typeStr = "usercoins";
+                break;
+            default:
+                co_return nullptr;
+                break;
+        }
+    } else {
+        co_return nullptr;
+    }
+
+    auto existing = co_await waitForMainThread([this, type = std::make_pair(type, stat)] -> CCArray* {
+        if(m_globalScoreDict.contains(type)) {
+            return m_globalScoreDict[type];
+        }
+        return nullptr;
+    });
+
+    auto res = co_await ServerUtils::getBaseRequest(false)
+        .get(fmt::format("https://www.geometrydash.com/data/top-{}.json", typeStr));
+
+    if(!res.ok() || res.json().isErr()) co_return nullptr;
+
+    CCArray* scores = nullptr;
+    co_await waitForMainThread([this, type = std::make_pair(type, stat), res = std::move(res.json().unwrap()), &scores] mutable {
+        scores = CCArray::create();
+        m_globalScoreDict[type] = scores;
+
+        for(const auto& entry : res) {
+            auto score = GJUserScore::create();
+            score->m_accountID = entry["accountID"].asInt().unwrapOr(0);
+            score->m_userID = entry["userID"].asInt().unwrapOr(0);
+            score->m_userName = entry["userName"].asString().unwrapOr("");
+            score->m_stars = entry["stars"].asInt().unwrapOr(0);
+            score->m_moons = entry["moons"].asInt().unwrapOr(0);
+            score->m_diamonds = entry["diamonds"].asInt().unwrapOr(0);
+            score->m_demons = entry["demons"].asInt().unwrapOr(0);
+            score->m_secretCoins = entry["coins"].asInt().unwrapOr(0);
+            score->m_userCoins = entry["userCoins"].asInt().unwrapOr(0);
+            score->m_creatorPoints = entry["creatorScore"].asInt().unwrapOr(0);
+            score->m_playerRank = entry["globalRank"].asInt().unwrapOr(0);
+            score->m_iconID = entry["icon"].asInt().unwrapOr(0);
+            score->m_iconType = static_cast<IconType>(entry["iconType"].asInt().unwrapOr(0));
+            score->m_special = entry["special"].asInt().unwrapOr(0);
+            score->m_color1 = entry["color1"].asInt().unwrapOr(0);
+            score->m_color2 = entry["color2"].asInt().unwrapOr(0);
+            score->m_color3 = entry["color3"].asInt().unwrapOr(0);
+
+            scores->addObject(score);
+        }
+
+        BetterInfoCache::sharedState()->cacheUserScores(scores);
+        return scores;
+    });
+
+    co_return scores;
+}
